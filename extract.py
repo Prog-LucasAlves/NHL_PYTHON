@@ -69,7 +69,7 @@ def fetch_nhl_seasons():
 
                 # Criamos o DataFrame e salvamos FORA do loop dos times
                 df_teams = pd.DataFrame(all_data)
-                file_path = f"../NHL/team/nhl_{SEASON}.csv"
+                file_path = f"../NHL_PYTHON/team/nhl_{SEASON}.csv"
                 df_teams.to_csv(file_path, index=False, sep=";")
 
                 print(f"Sucesso: {file_path} gerado ({len(all_data)} times).")
