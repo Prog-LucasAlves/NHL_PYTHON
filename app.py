@@ -1,10 +1,10 @@
+import math
 import os
 import unicodedata
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
 import streamlit as st
 
 st.set_page_config(page_title="NHL Super App Apostas (+EV)", layout="wide", page_icon="🏒")
@@ -30,6 +30,12 @@ def normalize_name(name):
     name = unicodedata.normalize("NFKD", str(name)).encode("ASCII", "ignore").decode("utf-8")
     name = name.replace(".", "").strip().lower()
     return name
+
+
+def poisson_pmf(k, lam):
+    if lam < 0:
+        return 0.0
+    return math.exp(-lam) * (lam**k) / math.factorial(k)
 
 
 @st.cache_data
@@ -333,7 +339,7 @@ with tab2:
         prob_matrix = np.zeros((max_g, max_g))
         for i in range(max_g):
             for j in range(max_g):
-                prob_matrix[i, j] = stats.poisson.pmf(i, lam_home) * stats.poisson.pmf(j, lam_away)
+                prob_matrix[i, j] = poisson_pmf(i, lam_home) * poisson_pmf(j, lam_away)
 
         prob_home_win = np.tril(prob_matrix, -1).sum()
         prob_away_win = np.triu(prob_matrix, 1).sum()
