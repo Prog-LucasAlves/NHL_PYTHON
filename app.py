@@ -66,6 +66,28 @@ def main():
         st.caption(f"**{initial_bankroll:.0f} uds** | R$ {unit_value:,.2f}/ud | Kelly {kelly_fraction:.0%}")
         st.caption("_Configure na aba 📊 Gestão de Banca_")
 
+        st.divider()
+        scraping = st.session_state.get("scraper_running", False)
+        if st.button(
+            "⏳ Coletando..." if scraping else "🔄 Atualizar Dados NST",
+            use_container_width=True,
+            disabled=scraping,
+            help="Captura os dados mais recentes do Natural Stat Trick.",
+            key="sidebar_scraper_btn",
+        ):
+            import threading
+
+            from nhl_engine.ui.tab_bankroll import _run_scraper_background
+
+            st.session_state["scraper_running"] = True
+            st.session_state["scraper_log"] = "⏳ Iniciando coleta..."
+            threading.Thread(target=_run_scraper_background, args=("scraper_log",), daemon=True).start()
+            st.rerun()
+
+        log = st.session_state.get("scraper_log", "")
+        if log:
+            st.caption(log[:120])
+
     with tab1:
         tab_prediction.render(
             predictor,

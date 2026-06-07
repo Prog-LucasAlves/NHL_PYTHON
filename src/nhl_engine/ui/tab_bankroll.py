@@ -1,6 +1,5 @@
 import subprocess
 import sys
-import threading
 
 import pandas as pd
 import plotly.express as px
@@ -110,34 +109,7 @@ def render() -> tuple[float, float, float]:
 
     st.divider()
 
-    # 2. Botão de captura de dados
-    col_btn, col_status = st.columns([1, 3])
-    with col_btn:
-        scraping = st.session_state.get("scraper_running", False)
-        if st.button(
-            "🔄 Atualizar Dados NST" if not scraping else "⏳ Coletando...",
-            use_container_width=True,
-            disabled=scraping,
-            help="Captura os dados mais recentes do Natural Stat Trick e atualiza o modelo.",
-        ):
-            st.session_state["scraper_running"] = True
-            st.session_state["scraper_log"] = "⏳ Iniciando coleta..."
-            thread = threading.Thread(
-                target=_run_scraper_background,
-                args=("scraper_log",),
-                daemon=True,
-            )
-            thread.start()
-            st.rerun()
-
-    with col_status:
-        log = st.session_state.get("scraper_log", "")
-        if log:
-            st.markdown(log)
-
-    st.divider()
-
-    # 3. Histórico de apostas
+    # Histórico de apostas
     df_history = load_history()
 
     if df_history is None or df_history.empty:

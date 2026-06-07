@@ -1,0 +1,6 @@
+{
+  "bankroll": 100.0,
+  "unit_value": 2.0,
+  "unit_pct": 2.0,
+  "kelly_fraction": 0.5
+}
