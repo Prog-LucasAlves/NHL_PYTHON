@@ -10,6 +10,7 @@ MODEL_PATH = DATA_DIR / "nhl_model.cbm"
 DATA_PATH = DATA_DIR / "nhl_games_all_seasons.csv"
 NST_STATS_PATH = DATA_DIR / "nst_team_stats.csv"
 BETS_LOG_PATH = LOGS_DIR / "bets_log.csv"
+BANKROLL_CONFIG_PATH = LOGS_DIR / "bankroll_config.json"
 
 # Garante que os diretórios existam
 DATA_DIR.mkdir(exist_ok=True)
