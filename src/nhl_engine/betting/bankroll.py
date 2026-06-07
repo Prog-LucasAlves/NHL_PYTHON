@@ -1,6 +1,33 @@
+import json
+
 import pandas as pd
 
-from nhl_engine.config import BETS_LOG_PATH
+from nhl_engine.config import BANKROLL_CONFIG_PATH, BETS_LOG_PATH
+
+_BANKROLL_DEFAULTS = {"bankroll": 100.0, "unit_value": 10.0, "kelly_fraction": 0.50}
+
+
+def load_bankroll_config() -> dict:
+    """Carrega configurações de banca do arquivo JSON. Retorna defaults se não existir."""
+    if BANKROLL_CONFIG_PATH.exists():
+        try:
+            with open(BANKROLL_CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {**_BANKROLL_DEFAULTS, **data}
+        except Exception:
+            pass
+    return dict(_BANKROLL_DEFAULTS)
+
+
+def save_bankroll_config(bankroll: float, unit_value: float, kelly_fraction: float) -> None:
+    """Persiste configurações de banca no arquivo JSON."""
+    BANKROLL_CONFIG_PATH.parent.mkdir(exist_ok=True)
+    with open(BANKROLL_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(
+            {"bankroll": bankroll, "unit_value": unit_value, "kelly_fraction": kelly_fraction},
+            f,
+            indent=2,
+        )
 
 
 def log_bet(date: str, home: str, away: str, entry: str, odd: float, result: str, stake: float = 1.0) -> pd.DataFrame:

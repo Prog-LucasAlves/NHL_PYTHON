@@ -1,5 +1,6 @@
 import streamlit as st
 
+from nhl_engine.betting.bankroll import load_bankroll_config
 from nhl_engine.config import TEAM_MAPPING
 from nhl_engine.model.predict import NHLPredictorV2
 from nhl_engine.ui import tab_bankroll, tab_model, tab_prediction
@@ -29,37 +30,57 @@ def main():
         st.info("Certifique-se de que os arquivos 'nhl_model.cbm' e 'nhl_games_all_seasons.csv' existam na pasta data/.")
         return
 
+    # Lê configurações de banca persistidas (definidas na aba Gestão de Banca)
+    cfg = load_bankroll_config()
+    initial_bankroll = float(cfg["bankroll"])
+    unit_value = float(cfg["unit_value"])
+    kelly_fraction = float(cfg["kelly_fraction"])
+
     tab1, tab2, tab3 = st.tabs(["🎯 Predição de Partida", "📊 Gestão de Banca", "🤖 Desempenho do Modelo"])
 
-    # Sidebar
+    # Sidebar — apenas seleção de times e odds de mercado
     with st.sidebar:
         st.image("https://assets.nhle.com/logos/nhl/svg/NHL_light.svg", width=100)
         st.header("Configurações")
 
-        home_team_abbr = st.selectbox("Time da Casa (Home)", teams, index=teams.index("BOS") if "BOS" in teams else 0, format_func=lambda x: TEAM_MAPPING.get(x, x))
-        away_team_abbr = st.selectbox("Time de Fora (Away)", teams, index=teams.index("TOR") if "TOR" in teams else 1, format_func=lambda x: TEAM_MAPPING.get(x, x))
+        home_team_abbr = st.selectbox(
+            "Time da Casa (Home)",
+            teams,
+            index=teams.index("BOS") if "BOS" in teams else 0,
+            format_func=lambda x: TEAM_MAPPING.get(x, x),
+        )
+        away_team_abbr = st.selectbox(
+            "Time de Fora (Away)",
+            teams,
+            index=teams.index("TOR") if "TOR" in teams else 1,
+            format_func=lambda x: TEAM_MAPPING.get(x, x),
+        )
 
         st.divider()
         st.markdown("#### Mercado de Apostas")
         market_odd_home = st.number_input(f"Odd na Casa ({home_team_abbr})", min_value=1.0, value=2.0, step=0.01)
-        market_odd_away = st.number_input(f"Odd na Casa ({away_team_abbr})", min_value=1.0, value=2.0, step=0.01)
+        market_odd_away = st.number_input(f"Odd Visitante ({away_team_abbr})", min_value=1.0, value=2.0, step=0.01)
 
         st.divider()
-        st.markdown("#### Gestão de Banca & Risco")
-        initial_bankroll = st.number_input("Tamanho da Banca (uds)", min_value=10.0, value=100.0, step=5.0, help="Tamanho total da banca de apostas expresso em Unidades de Stake.")
-        unit_value = st.number_input("Valor de 1 Unidade ($/R$)", min_value=1.0, value=100.0, step=5.0, help="Valor monetário correspondente a 1 Unidade de Stake.")
-        kelly_fraction = st.selectbox(
-            "Fração de Kelly",
-            [0.25, 0.50, 1.0, 0.0],
-            index=1,
-            format_func=lambda x: "Kelly Completo (100%)" if x == 1.0 else ("Meio Kelly (50%)" if x == 0.50 else ("Um Quarto de Kelly (25%)" if x == 0.25 else "Desativado (Stake Fixa 1.0)")),
-        )
+        st.markdown("#### Banca Ativa")
+        st.caption(f"**{initial_bankroll:.0f} uds** | R$ {unit_value:,.2f}/ud | Kelly {kelly_fraction:.0%}")
+        st.caption("_Configure na aba 📊 Gestão de Banca_")
 
     with tab1:
-        tab_prediction.render(predictor, home_team_abbr, away_team_abbr, market_odd_home, market_odd_away, initial_bankroll, unit_value, kelly_fraction)
+        tab_prediction.render(
+            predictor,
+            home_team_abbr,
+            away_team_abbr,
+            market_odd_home,
+            market_odd_away,
+            initial_bankroll,
+            unit_value,
+            kelly_fraction,
+        )
 
     with tab2:
-        tab_bankroll.render(initial_bankroll, unit_value)
+        # render() agora retorna os valores atualizados caso o usuário salve nova banca
+        initial_bankroll, unit_value, kelly_fraction = tab_bankroll.render()
 
     with tab3:
         tab_model.render(predictor)
