@@ -47,7 +47,6 @@ def _render_bankroll_setup() -> tuple[float, float, float]:
 
     with st.expander("⚙️ Configurar Banca", expanded=not st.session_state.get("bankroll_set", False)):
         st.markdown("#### 🏦 Criar / Editar Banca")
-        st.caption("Defina os parâmetros da sua banca. O **Valor da Unidade** é calculado automaticamente como 10% da banca.")
 
         col_a, col_b = st.columns(2)
         with col_a:
@@ -59,9 +58,20 @@ def _render_bankroll_setup() -> tuple[float, float, float]:
                 help="Total da banca expresso em Unidades de Stake.",
                 key="setup_bankroll",
             )
-            # Unidade = 10% da banca (calculado automaticamente)
-            unit_value = round(bankroll * 0.10, 2)
-            st.info(f"💡 Valor de 1 Unidade (10% da banca): **R$ {unit_value:,.2f}**")
+
+            saved_pct = float(cfg.get("unit_pct", 10.0))
+            unit_pct = st.slider(
+                "Valor da Unidade (% da banca)",
+                min_value=1.0,
+                max_value=25.0,
+                value=saved_pct,
+                step=0.5,
+                format="%.1f%%",
+                help="Define quanto 1 Unidade representa em relação ao total da banca.",
+                key="setup_unit_pct",
+            )
+            unit_value = round(bankroll * unit_pct / 100, 2)
+            st.info(f"💡 **{unit_pct:.1f}%** da banca = **R$ {unit_value:,.2f}** por unidade")
 
         with col_b:
             kelly_fraction = st.selectbox(
@@ -78,9 +88,9 @@ def _render_bankroll_setup() -> tuple[float, float, float]:
             )
 
         if st.button("💾 Salvar Banca", use_container_width=True, type="primary"):
-            save_bankroll_config(bankroll, unit_value, kelly_fraction)
+            save_bankroll_config(bankroll, unit_value, kelly_fraction, unit_pct)
             st.session_state["bankroll_set"] = True
-            st.success(f"✅ Banca salva: **{bankroll:.0f} uds** | Unidade: **R$ {unit_value:,.2f}** | Kelly: **{kelly_fraction:.0%}**")
+            st.success(f"✅ Banca salva: **{bankroll:.0f} uds** | Unidade: **{unit_pct:.1f}%** → **R$ {unit_value:,.2f}** | Kelly: **{kelly_fraction:.0%}**")
             st.rerun()
 
     # Lê a config salva mais recente (pode ter acabado de salvar acima)

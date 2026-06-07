@@ -19,12 +19,17 @@ def load_bankroll_config() -> dict:
     return dict(_BANKROLL_DEFAULTS)
 
 
-def save_bankroll_config(bankroll: float, unit_value: float, kelly_fraction: float) -> None:
+def save_bankroll_config(bankroll: float, unit_value: float, kelly_fraction: float, unit_pct: float = 10.0) -> None:
     """Persiste configurações de banca no arquivo JSON."""
     BANKROLL_CONFIG_PATH.parent.mkdir(exist_ok=True)
     with open(BANKROLL_CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(
-            {"bankroll": bankroll, "unit_value": unit_value, "kelly_fraction": kelly_fraction},
+            {
+                "bankroll": bankroll,
+                "unit_value": unit_value,
+                "unit_pct": unit_pct,
+                "kelly_fraction": kelly_fraction,
+            },
             f,
             indent=2,
         )
