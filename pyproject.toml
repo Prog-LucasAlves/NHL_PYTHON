@@ -1,10 +1,11 @@
 [project]
-name = "nhl-python"
-version = "0.1.0"
-description = "Add your description here"
+name = "nhl-engine"
+version = "1.0.0"
+description = "NHL Predictive Engine — AI-powered betting analysis for NHL games"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4>=4.15.0",
     "catboost>=1.2.10",
     "matplotlib>=3.10.8",
     "pandas>=2.3.3",
@@ -12,10 +13,21 @@ dependencies = [
     "requests>=2.33.0",
     "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
+    "selenium>=4.44.0",
     "streamlit>=1.55.0",
+    "undetected-chromedriver>=3.5.5",
 ]
 
 [dependency-groups]
 dev = [
     "pre-commit>=4.5.1",
 ]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+nhl-extract = "nhl_engine.data.extract:main"
+nhl-scrape-nst = "nhl_engine.data.scraper:main"
+nhl-train = "nhl_engine.model.train:main"
+nhl-evaluate = "nhl_engine.betting.evaluate:main"
