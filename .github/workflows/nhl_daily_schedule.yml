@@ -1,0 +1,29 @@
+name: NHL Daily Telegram Notification
+
+on:
+  schedule:
+    - cron: '0 13 * * *' # 13:00 UTC = 10:00 BRT (Horário de Brasília)
+  workflow_dispatch: # Permite execução manual pela interface do GitHub
+
+jobs:
+  notify:
+    name: Fetch Games and Notify Telegram
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv-action@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Run Notification Script
+        run: uv run python -m nhl_engine.notifications.telegram_notify
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
