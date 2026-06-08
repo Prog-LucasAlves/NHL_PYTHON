@@ -7,6 +7,32 @@ import requests
 
 from nhl_engine.config import TEAM_MAPPING
 
+# Mapeamentos para data formatada em português brasileiro sem dependência de locales do sistema
+DIAS_SEMANA = {
+    0: "Segunda-feira",
+    1: "Terça-feira",
+    2: "Quarta-feira",
+    3: "Quinta-feira",
+    4: "Sexta-feira",
+    5: "Sábado",
+    6: "Domingo",
+}
+
+MESES = {
+    1: "Janeiro",
+    2: "Fevereiro",
+    3: "Março",
+    4: "Abril",
+    5: "Maio",
+    6: "Junho",
+    7: "Julho",
+    8: "Agosto",
+    9: "Setembro",
+    10: "Outubro",
+    11: "Novembro",
+    12: "Dezembro",
+}
+
 
 def get_nhl_schedule(date_str: str) -> list[dict]:
     """Busca a lista de jogos da NHL para uma data específica (YYYY-MM-DD)."""
@@ -33,18 +59,26 @@ def get_nhl_schedule(date_str: str) -> list[dict]:
 
 def format_message(games: list[dict], date_str: str) -> str:
     """Formata a lista de jogos em uma mensagem amigável no formato HTML para o Telegram."""
-    # Converte a data YYYY-MM-DD para formato brasileiro DD/MM/AAAA
+    # Gera a data formatada: ex: Domingo, 7 de Junho de 2026
     try:
         dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
-        formatted_date = dt_obj.strftime("%d/%m/%Y")
-    except ValueError:
+        dia_semana = DIAS_SEMANA[dt_obj.weekday()]
+        dia = dt_obj.day
+        mes = MESES[dt_obj.month]
+        ano = dt_obj.year
+        formatted_date = f"{dia_semana}, {dia} de {mes} de {ano}"
+    except Exception:
         formatted_date = date_str
 
+    header = f"🏒 <b>NHL - JOGOS DE HOJE</b> 🏒\n📅 <i>{formatted_date}</i>\n_______________________\n"
+
+    footer = "_______________________\n\n<i>Notificação automática gerada pelo NHL Stats Predictor.</i>"
+
     if not games:
-        return f"🏒 <b>Sem jogos da NHL agendados para hoje ({formatted_date})</b>"
+        body = "\n😴 Não há partidas programadas para a rodada de hoje.\n"
+        return header + body + footer
 
-    lines = [f"🏒 <b>Jogos da NHL de Hoje ({formatted_date})</b> 🏒", ""]
-
+    body_lines = [""]
     for game in games:
         away_abbr = game.get("awayTeam", {}).get("abbrev", "Away")
         home_abbr = game.get("homeTeam", {}).get("abbrev", "Home")
@@ -81,11 +115,12 @@ def format_message(games: list[dict], date_str: str) -> str:
             if series_title and game_number:
                 series_info = f"\n🏆 <i>{series_title} - Jogo {game_number}</i>"
 
-        lines.append(f"✈️ <b>{away_name}</b> vs 🏠 <b>{home_name}</b>")
-        lines.append(f"⏰ {game_time_str}{game_link_html}{series_info}")
-        lines.append("-" * 35)
+        body_lines.append(f"✈️ <b>{away_name}</b> vs 🏠 <b>{home_name}</b>")
+        body_lines.append(f"⏰ {game_time_str}{game_link_html}{series_info}")
+        body_lines.append("")
 
-    return "\n".join(lines)
+    body = "\n".join(body_lines)
+    return header + body + footer
 
 
 def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
