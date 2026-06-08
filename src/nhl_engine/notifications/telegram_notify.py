@@ -72,11 +72,11 @@ def format_message(games: list[dict], date_str: str) -> str:
 
     header = f"🏒 <b>NHL - JOGOS DE HOJE</b> 🏒\n📅 <i>{formatted_date}</i>\n_______________________\n"
 
-    footer = "_______________________\n\n<i>Notificação automática gerada pelo NHL Stats Predictor.</i>"
+    footer_clean = "\n\n<i>Notificação automática gerada pelo NHL Stats Predictor.</i>"
 
     if not games:
-        body = "\n😴 Não há partidas programadas para a rodada de hoje.\n"
-        return header + body + footer
+        body = "\n😴 Não há partidas programadas para a rodada de hoje.\n_______________________"
+        return header + body + footer_clean
 
     body_lines = [""]
     for game in games:
@@ -95,16 +95,18 @@ def format_message(games: list[dict], date_str: str) -> str:
                 dt_utc = datetime.fromisoformat(start_time_utc.replace("Z", "+00:00"))
                 br_tz = zoneinfo.ZoneInfo("America/Sao_Paulo")
                 dt_br = dt_utc.astimezone(br_tz)
-                game_time_str = dt_br.strftime("%H:%M") + " BRT"
+                game_time_str = dt_br.strftime("%H:%M") + " (Horário de Brasília)"
             except Exception as e:
                 print(f"Erro ao converter horário {start_time_utc}: {e}")
 
-        # Formata o link do Game Center
-        game_center_raw = game.get("gameCenterLink")
-        game_link_html = ""
-        if game_center_raw:
-            game_center_url = f"https://www.nhl.com{game_center_raw}"
-            game_link_html = f' | <a href="{game_center_url}">Game Center</a>'
+        # Transmissão (broadcasters)
+        broadcasts = [b.get("network") for b in game.get("tvBroadcasts", []) if b.get("network")]
+        broadcast_str = ", ".join(broadcasts) if broadcasts else "Não disponível"
+
+        # Localização (arena/venue e cidade)
+        venue_name = game.get("venue", {}).get("default", "Não disponível")
+        home_place = game.get("homeTeam", {}).get("placeName", {}).get("default", "")
+        venue_str = f"{venue_name} - {home_place}" if home_place else venue_name
 
         # Verifica se há informações de playoffs / série
         series_info = ""
@@ -115,12 +117,21 @@ def format_message(games: list[dict], date_str: str) -> str:
             if series_title and game_number:
                 series_info = f"\n🏆 <i>{series_title} - Jogo {game_number}</i>"
 
-        body_lines.append(f"✈️ <b>{away_name}</b> vs 🏠 <b>{home_name}</b>")
-        body_lines.append(f"⏰ {game_time_str}{game_link_html}{series_info}")
+        body_lines.append(f"🔥 {away_name} ({away_abbr}) vs {home_name} ({home_abbr})")
+        body_lines.append(f"⏰ {game_time_str}")
+        body_lines.append(f"📺 Transmissão: {broadcast_str}")
+        body_lines.append(f"🏟️ {venue_str}")
+        if series_info:
+            body_lines.append(series_info.strip())
+        body_lines.append("_______________________")
         body_lines.append("")
 
+    # Remove o último elemento vazio para evitar quebras de linhas duplas desnecessárias
+    if body_lines and body_lines[-1] == "":
+        body_lines.pop()
+
     body = "\n".join(body_lines)
-    return header + body + footer
+    return header + body + footer_clean
 
 
 def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
