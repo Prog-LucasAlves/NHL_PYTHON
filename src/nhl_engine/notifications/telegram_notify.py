@@ -70,13 +70,17 @@ def format_message(games: list[dict], date_str: str) -> str:
     except Exception:
         formatted_date = date_str
 
-    header = f"🏒 <b>NHL - JOGOS DE HOJE</b> 🏒\n📅 <i>{formatted_date}</i>\n_______________________\n"
-
-    footer_clean = "\n\n<i>Notificação automática gerada pelo NHL Stats Predictor.</i>"
-
     if not games:
-        body = "\n😴 Não há partidas programadas para a rodada de hoje.\n_______________________"
-        return header + body + footer_clean
+        return (
+            f"🏒 <b>NHL - JOGOS DE HOJE</b> 🏒\n📅 <i>{formatted_date}</i>\n\n"
+            "_______________________\n\n"
+            "😴 Não há partidas programadas para a rodada de hoje.\n\n"
+            "_______________________\n"
+            "<i>Notificação automática gerada pelo NHL Stats Predictor.</i>"
+        )
+
+    header = f"🏒 <b>NHL - JOGOS DE HOJE</b> 🏒\n📅 <i>{formatted_date}</i>\n_______________________\n"
+    footer_clean = "\n<i>Notificação automática gerada pelo NHL Stats Predictor.</i>"
 
     body_lines = [""]
     for game in games:
