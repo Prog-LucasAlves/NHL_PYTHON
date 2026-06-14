@@ -1,13 +1,20 @@
 import numpy as np
-from catboost import CatBoostClassifier
+from catboost import CatBoostClassifier, CatBoostRegressor
 from sklearn.metrics import accuracy_score, log_loss
 
-from nhl_engine.config import MODEL_PATH
+from nhl_engine.config import (
+    DATA_PATH,
+    MODEL_PATH,
+    PREGAME_MONEYLINE_MODEL_PATH,
+    TOTALS_AWAY_MODEL_PATH,
+    TOTALS_HOME_MODEL_PATH,
+)
 from nhl_engine.model.features import (
     CAT_FEATURES,
     FEATURE_COLUMNS,
     build_features,
 )
+from nhl_engine.model.pregame import PREGAME_FEATURE_COLUMNS, build_pregame_features
 
 
 def brier_score_loss(y_true, y_prob):
@@ -136,8 +143,31 @@ def train_model(data_path: str | None = None) -> CatBoostClassifier:
     return final_model
 
 
+def train_pregame_models(data_path: str | None = None) -> tuple[CatBoostClassifier, CatBoostRegressor, CatBoostRegressor]:
+    """Treina modelos de moneyline e gols com features disponíveis antes do jogo."""
+    import pandas as pd
+
+    games = pd.read_csv(data_path or DATA_PATH)
+    features = build_pregame_features(games, min_games=5)
+    x_train = features[PREGAME_FEATURE_COLUMNS]
+
+    moneyline = CatBoostClassifier(iterations=500, depth=5, learning_rate=0.04, loss_function="Logloss", verbose=100, random_seed=42)
+    home_goals = CatBoostRegressor(iterations=500, depth=5, learning_rate=0.04, loss_function="RMSE", verbose=100, random_seed=42)
+    away_goals = CatBoostRegressor(iterations=500, depth=5, learning_rate=0.04, loss_function="RMSE", verbose=100, random_seed=42)
+
+    moneyline.fit(x_train, features["target_home_win"])
+    home_goals.fit(x_train, features["home_score"])
+    away_goals.fit(x_train, features["away_score"])
+
+    moneyline.save_model(str(PREGAME_MONEYLINE_MODEL_PATH))
+    home_goals.save_model(str(TOTALS_HOME_MODEL_PATH))
+    away_goals.save_model(str(TOTALS_AWAY_MODEL_PATH))
+    print("Modelos pregame salvos com features temporais sem vazamento.")
+    return moneyline, home_goals, away_goals
+
+
 def main():
-    train_model()
+    train_pregame_models()
 
 
 if __name__ == "__main__":
