@@ -7,6 +7,8 @@ LOGS_DIR = PROJECT_ROOT / "logs"
 
 # Arquivos
 MODEL_PATH = DATA_DIR / "nhl_model.cbm"
+TOTALS_HOME_MODEL_PATH = DATA_DIR / "nhl_totals_home.cbm"
+TOTALS_AWAY_MODEL_PATH = DATA_DIR / "nhl_totals_away.cbm"
 DATA_PATH = DATA_DIR / "nhl_games_all_seasons.csv"
 NST_STATS_PATH = DATA_DIR / "nst_team_stats.csv"
 BETS_LOG_PATH = LOGS_DIR / "bets_log.csv"
