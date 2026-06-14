@@ -57,3 +57,9 @@ def settle_total_bet(side: str, line: float, total_goals: int) -> str:
     if side.lower() == "under":
         return "Green" if total_goals < line else "Red"
     raise ValueError("side deve ser 'Over' ou 'Under'")
+
+
+def is_validated_total_strategy(side: str, line: float) -> bool:
+    """Libera apenas segmentos positivos em todas as dobras walk-forward."""
+    normalized = side.lower()
+    return (normalized == "over" and line <= 5.5) or (normalized == "under" and line >= 7.5)

@@ -1,6 +1,3 @@
-import subprocess
-import sys
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -11,27 +8,20 @@ from nhl_engine.betting.bankroll import (
     save_bankroll_config,
 )
 from nhl_engine.config import BETS_LOG_PATH
+from nhl_engine.data.refresh import refresh_all_data
 
 # ─── Scraper helpers ──────────────────────────────────────────────────────────
 
 
 def _run_scraper_background(log_key: str) -> None:
-    """Executa o scraper em thread separada e grava resultado no session_state."""
-    st.session_state[log_key] = "⏳ Coletando dados do Natural Stat Trick..."
+    """Atualiza jogos NHL e NST em thread separada."""
+    st.session_state[log_key] = "⏳ Atualizando jogos NHL e dados do Natural Stat Trick..."
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "nhl_engine.data.scraper"],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        output = result.stdout or result.stderr or "(sem saída)"
-        if result.returncode == 0:
-            st.session_state[log_key] = f"✅ Dados atualizados!\n\n```\n{output[-1500:]}\n```"
-        else:
-            st.session_state[log_key] = f"❌ Erro ao coletar dados:\n\n```\n{output[-1500:]}\n```"
-    except subprocess.TimeoutExpired:
-        st.session_state[log_key] = "⚠️ Timeout: o scraper demorou mais de 5 min."
+        results = refresh_all_data()
+        lines = [f"{'✅' if item.success else '❌'} {item.message}" for item in results]
+        st.session_state[log_key] = "\n\n".join(lines)
+        if any(item.success for item in results):
+            st.cache_resource.clear()
     except Exception as exc:
         st.session_state[log_key] = f"❌ Exceção: {exc}"
     st.session_state["scraper_running"] = False
@@ -123,10 +113,11 @@ def render() -> tuple[float, float, float]:
     df_history["Resultado"] = df_history["Resultado"].fillna("Pendente")
 
     # Métricas calculadas apenas sobre apostas resolvidas
-    df_resolved = df_history[df_history["Resultado"].isin(["Green", "Red"])].copy()
+    df_resolved = df_history[df_history["Resultado"].isin(["Green", "Red", "Push"])].copy()
+    df_decided = df_resolved[df_resolved["Resultado"].isin(["Green", "Red"])]
     total_resolved = len(df_resolved)
     p_total_uds = df_resolved["PL"].sum() if total_resolved > 0 else 0.0
-    win_rate = (df_resolved["Resultado"] == "Green").mean() if total_resolved > 0 else 0.0
+    win_rate = (df_decided["Resultado"] == "Green").mean() if len(df_decided) > 0 else 0.0
     avg_odd = df_resolved["Odd"].mean() if total_resolved > 0 else 0.0
     roi_pct = (p_total_uds / initial_bankroll * 100) if initial_bankroll > 0 else 0.0
     pl_cash = p_total_uds * unit_value
@@ -165,7 +156,7 @@ def render() -> tuple[float, float, float]:
     df_display["Stake"] = df_display["Stake"] * unit_value
     df_display["PL"] = df_display["PL"] * unit_value
 
-    cols_ordered = ["Data", "Mandante", "Visitante", "Entrada", "Odd", "Resultado", "Stake", "PL"]
+    cols_ordered = ["Data", "Mandante", "Visitante", "Mercado", "Linha", "Entrada", "Odd", "Resultado", "Stake", "PL"]
     df_view = df_display[[c for c in cols_ordered if c in df_display.columns]].copy()
 
     edited_df = st.data_editor(
@@ -173,7 +164,7 @@ def render() -> tuple[float, float, float]:
         column_config={
             "Resultado": st.column_config.SelectboxColumn(
                 "Resultado",
-                options=["Pendente", "Green", "Red"],
+                options=["Pendente", "Green", "Red", "Push"],
                 required=True,
             ),
             "Odd": st.column_config.NumberColumn("Odd", format="%.2f", disabled=True),
@@ -182,6 +173,8 @@ def render() -> tuple[float, float, float]:
             "Data": st.column_config.Column(disabled=True),
             "Mandante": st.column_config.Column(disabled=True),
             "Visitante": st.column_config.Column(disabled=True),
+            "Mercado": st.column_config.Column(disabled=True),
+            "Linha": st.column_config.NumberColumn("Linha", format="%.1f", disabled=True),
             "Entrada": st.column_config.Column(disabled=True),
         },
         num_rows="dynamic",

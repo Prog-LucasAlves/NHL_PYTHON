@@ -3,9 +3,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from catboost import CatBoostRegressor
+from catboost import CatBoostClassifier, CatBoostRegressor
 
-from nhl_engine.config import DATA_PATH, TOTALS_AWAY_MODEL_PATH, TOTALS_HOME_MODEL_PATH
+from nhl_engine.config import DATA_PATH, TOTALS_AWAY_MODEL_PATH, TOTALS_DISTRIBUTION_MODEL_PATH, TOTALS_HOME_MODEL_PATH
 from nhl_engine.model.pregame import PREGAME_FEATURE_COLUMNS, latest_matchup_features
 
 
@@ -39,6 +39,14 @@ def total_probabilities(expected_total: float, line: float) -> TotalProbabilitie
     return TotalProbabilities(over=over, under=under, push=push)
 
 
+def total_probabilities_from_distribution(classes, probabilities, line: float) -> TotalProbabilities:
+    """Converte uma distribuição discreta calibrada em probabilidades de mercado."""
+    under = sum(float(probability) for goals, probability in zip(classes, probabilities, strict=True) if float(goals) < line)
+    push = sum(float(probability) for goals, probability in zip(classes, probabilities, strict=True) if float(goals) == line)
+    over = sum(float(probability) for goals, probability in zip(classes, probabilities, strict=True) if float(goals) > line)
+    return TotalProbabilities(over=over, under=under, push=push)
+
+
 class NHLTotalsPredictor:
     """Prediz gols esperados e preços justos para uma linha configurável."""
 
@@ -47,13 +55,16 @@ class NHLTotalsPredictor:
         data_path: str | Path = DATA_PATH,
         home_model_path: str | Path = TOTALS_HOME_MODEL_PATH,
         away_model_path: str | Path = TOTALS_AWAY_MODEL_PATH,
+        distribution_model_path: str | Path = TOTALS_DISTRIBUTION_MODEL_PATH,
     ):
         self.data_path = Path(data_path)
         self.home_model_path = Path(home_model_path)
         self.away_model_path = Path(away_model_path)
+        self.distribution_model_path = Path(distribution_model_path)
         self.games = pd.DataFrame()
         self.home_model: CatBoostRegressor | None = None
         self.away_model: CatBoostRegressor | None = None
+        self.distribution_model: CatBoostClassifier | None = None
 
     def _initialize(self) -> None:
         self.games = pd.read_csv(self.data_path)
@@ -62,6 +73,9 @@ class NHLTotalsPredictor:
             self.away_model = CatBoostRegressor()
             self.home_model.load_model(self.home_model_path)
             self.away_model.load_model(self.away_model_path)
+        if self.distribution_model_path.exists():
+            self.distribution_model = CatBoostClassifier()
+            self.distribution_model.load_model(self.distribution_model_path)
 
     def predict(self, home_team: str, away_team: str, line: float, game_type: int = 2) -> TotalsPrediction:
         if self.games.empty:
@@ -81,9 +95,13 @@ class NHLTotalsPredictor:
         expected_home = min(max(expected_home, 0.5), 6.0)
         expected_away = min(max(expected_away, 0.5), 6.0)
         expected_total = expected_home + expected_away
+        probabilities = total_probabilities(expected_total, line)
+        if self.distribution_model is not None:
+            distribution = self.distribution_model.predict_proba(features[PREGAME_FEATURE_COLUMNS])[0]
+            probabilities = total_probabilities_from_distribution(self.distribution_model.classes_, distribution, line)
         return TotalsPrediction(
             expected_home=expected_home,
             expected_away=expected_away,
             expected_total=expected_total,
-            probabilities=total_probabilities(expected_total, line),
+            probabilities=probabilities,
         )

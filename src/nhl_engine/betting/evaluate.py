@@ -1,14 +1,14 @@
 import pandas as pd
-from catboost import CatBoostClassifier, CatBoostRegressor
+from catboost import CatBoostClassifier
 
-from nhl_engine.betting.strategy import evaluate_bet, fair_odd, settle_total_bet
+from nhl_engine.betting.strategy import evaluate_bet, fair_odd, is_validated_total_strategy, settle_total_bet
 from nhl_engine.config import DATA_PATH
 from nhl_engine.model.pregame import PREGAME_FEATURE_COLUMNS, build_pregame_features
-from nhl_engine.model.totals import total_probabilities
+from nhl_engine.model.totals import total_probabilities_from_distribution
 
 SCENARIO_WARNING = "Cenario teorico: pressupoe que a odd minima exigida esteve disponivel."
 SCENARIO_EDGE = 0.05
-SCENARIO_TOTAL_LINE = 6.0
+SCENARIO_TOTAL_LINES = (5.5, 7.5)
 
 
 def walk_forward_season_splits(data: pd.DataFrame, validation_seasons: int = 3) -> list[tuple[pd.Index, pd.Index]]:
@@ -25,9 +25,14 @@ def walk_forward_season_splits(data: pd.DataFrame, validation_seasons: int = 3) 
 
 def _summary(data: pd.DataFrame) -> dict[str, float | int]:
     if data.empty:
-        return {"bets": 0, "staked": 0.0, "pl": 0.0, "yield_pct": 0.0, "wins": 0, "losses": 0, "pushes": 0}
+        return {"bets": 0, "staked": 0.0, "pl": 0.0, "yield_pct": 0.0, "wins": 0, "losses": 0, "pushes": 0, "max_drawdown_pct": 0.0}
     staked = float(data["stake"].sum())
     pl = float(data["pl"].sum())
+    max_drawdown = 0.0
+    if "bankroll" in data.columns:
+        equity = data["bankroll"].astype(float)
+        drawdowns = (equity.cummax() - equity) / equity.cummax().clip(lower=0.01) * 100
+        max_drawdown = float(drawdowns.max())
     return {
         "bets": len(data),
         "staked": staked,
@@ -36,6 +41,7 @@ def _summary(data: pd.DataFrame) -> dict[str, float | int]:
         "wins": int((data["result"] == "Green").sum()),
         "losses": int((data["result"] == "Red").sum()),
         "pushes": int((data["result"] == "Push").sum()),
+        "max_drawdown_pct": max_drawdown,
     }
 
 
@@ -46,37 +52,40 @@ def _breakdown(data: pd.DataFrame, column: str) -> pd.DataFrame:
 
 def scenario_report(bets: pd.DataFrame) -> dict:
     """Resume o cenario assumido, sempre preservando o alerta de limitacao."""
+    totals = bets[bets["market"] == "Total"]
     return {
         "warning": SCENARIO_WARNING,
         "overall": _summary(bets),
         "by_market": _breakdown(bets, "market"),
         "by_game_type": _breakdown(bets, "game_type"),
         "by_season": _breakdown(bets, "season"),
+        "by_line": _breakdown(totals, "line") if "line" in totals.columns else pd.DataFrame(),
     }
 
 
-def _fit_fold_models(train: pd.DataFrame) -> tuple[CatBoostClassifier, CatBoostRegressor, CatBoostRegressor]:
-    classifier = CatBoostClassifier(iterations=200, depth=4, learning_rate=0.05, loss_function="Logloss", verbose=0, random_seed=42)
-    home_regressor = CatBoostRegressor(iterations=200, depth=4, learning_rate=0.05, loss_function="RMSE", verbose=0, random_seed=42)
-    away_regressor = CatBoostRegressor(iterations=200, depth=4, learning_rate=0.05, loss_function="RMSE", verbose=0, random_seed=42)
+def _fit_fold_models(train: pd.DataFrame) -> tuple[CatBoostClassifier, CatBoostClassifier]:
+    classifier = CatBoostClassifier(iterations=200, depth=4, learning_rate=0.05, loss_function="Logloss", verbose=0, random_seed=42, allow_writing_files=False)
+    total_distribution = CatBoostClassifier(iterations=300, depth=5, learning_rate=0.05, loss_function="MultiClass", verbose=0, random_seed=42, allow_writing_files=False)
     x_train = train[PREGAME_FEATURE_COLUMNS]
     classifier.fit(x_train, train["target_home_win"])
-    home_regressor.fit(x_train, train["home_score"])
-    away_regressor.fit(x_train, train["away_score"])
-    return classifier, home_regressor, away_regressor
+    total_distribution.fit(x_train, train["total_goals"].clip(upper=12))
+    return classifier, total_distribution
 
 
-def build_walk_forward_predictions(features: pd.DataFrame, validation_seasons: int = 3, total_line: float = SCENARIO_TOTAL_LINE) -> pd.DataFrame:
+def build_walk_forward_predictions(
+    features: pd.DataFrame,
+    validation_seasons: int = 3,
+    total_lines: tuple[float, ...] = SCENARIO_TOTAL_LINES,
+) -> pd.DataFrame:
     """Treina em temporadas passadas e gera uma selecao por mercado/jogo."""
     predictions = []
     for train_index, validation_index in walk_forward_season_splits(features, validation_seasons):
         train = features.loc[train_index]
         validation = features.loc[validation_index]
-        classifier, home_regressor, away_regressor = _fit_fold_models(train)
+        classifier, total_distribution = _fit_fold_models(train)
         x_validation = validation[PREGAME_FEATURE_COLUMNS]
         home_probabilities = classifier.predict_proba(x_validation)[:, 1]
-        expected_home = home_regressor.predict(x_validation)
-        expected_away = away_regressor.predict(x_validation)
+        total_distributions = total_distribution.predict_proba(x_validation)
 
         for position, (_, row) in enumerate(validation.iterrows()):
             prob_home = float(home_probabilities[position])
@@ -95,21 +104,24 @@ def build_walk_forward_predictions(features: pd.DataFrame, validation_seasons: i
                 },
             )
 
-            expected_total = max(1.0, float(expected_home[position]) + float(expected_away[position]))
-            probabilities = total_probabilities(expected_total, total_line)
-            total_side = "Over" if probabilities.over >= probabilities.under else "Under"
-            total_probability = probabilities.over if total_side == "Over" else probabilities.under
-            total_result = settle_total_bet(total_side, total_line, int(row["total_goals"]))
-            predictions.append(
-                {
-                    **base,
-                    "market": "Total",
-                    "side": f"{total_side} {total_line:g}",
-                    "win_probability": total_probability,
-                    "push_probability": probabilities.push,
-                    "result": total_result,
-                },
-            )
+            for total_line in total_lines:
+                probabilities = total_probabilities_from_distribution(total_distribution.classes_, total_distributions[position], total_line)
+                total_side = "Over" if probabilities.over >= probabilities.under else "Under"
+                if not is_validated_total_strategy(total_side, total_line):
+                    continue
+                total_probability = probabilities.over if total_side == "Over" else probabilities.under
+                total_result = settle_total_bet(total_side, total_line, int(row["total_goals"]))
+                predictions.append(
+                    {
+                        **base,
+                        "market": "Total",
+                        "line": total_line,
+                        "side": f"{total_side} {total_line:g}",
+                        "win_probability": total_probability,
+                        "push_probability": probabilities.push,
+                        "result": total_result,
+                    },
+                )
     return pd.DataFrame(predictions).sort_values(["market", "date"]).reset_index(drop=True)
 
 
@@ -172,6 +184,7 @@ def evaluate_betting_performance(validation_seasons: int = 3) -> dict:
     _print_breakdown("POR MERCADO", report["by_market"])
     _print_breakdown("POR TIPO DE JOGO (2=REGULAR, 3=PLAYOFFS)", report["by_game_type"])
     _print_breakdown("POR TEMPORADA", report["by_season"])
+    _print_breakdown("TOTAIS POR LINHA VALIDADA", report["by_line"])
     return report
 
 

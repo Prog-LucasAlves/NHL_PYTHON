@@ -1,6 +1,6 @@
 import pytest
 
-from nhl_engine.betting.strategy import evaluate_bet, fair_odd, settle_total_bet
+from nhl_engine.betting.strategy import evaluate_bet, fair_odd, is_validated_total_strategy, settle_total_bet
 
 
 def test_fair_odd_accounts_for_push_probability():
@@ -30,6 +30,19 @@ def test_invalid_market_odd_never_qualifies():
 
     assert decision.qualifies is False
     assert decision.stake == 0.0
+
+
+@pytest.mark.parametrize(
+    ("side", "line", "expected"),
+    [
+        ("Over", 5.5, True),
+        ("Over", 6.0, False),
+        ("Under", 6.5, False),
+        ("Under", 7.5, True),
+    ],
+)
+def test_total_strategy_only_allows_robust_out_of_sample_segments(side, line, expected):
+    assert is_validated_total_strategy(side, line) is expected
 
 
 @pytest.mark.parametrize(
