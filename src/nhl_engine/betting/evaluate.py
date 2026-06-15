@@ -1,145 +1,194 @@
-import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
-from sklearn.metrics import accuracy_score, log_loss
 
-from nhl_engine.config import MODEL_PATH
-from nhl_engine.model.features import FEATURE_COLUMNS, build_features
+from nhl_engine.betting.strategy import evaluate_bet, fair_odd, is_validated_total_strategy, settle_total_bet
+from nhl_engine.config import DATA_PATH
+from nhl_engine.model.pregame import PREGAME_FEATURE_COLUMNS, build_pregame_features
+from nhl_engine.model.totals import total_probabilities_from_distribution
+
+SCENARIO_WARNING = "Cenario teorico: pressupoe que a odd minima exigida esteve disponivel."
+SCENARIO_EDGE = 0.05
+SCENARIO_TOTAL_LINES = (5.5, 7.5)
 
 
-def brier_score_loss(y_true, y_prob):
-    """Calcula o Brier Score Loss para calibração de probabilidade."""
-    return float(np.mean((y_true - y_prob) ** 2))
+def walk_forward_season_splits(data: pd.DataFrame, validation_seasons: int = 3) -> list[tuple[pd.Index, pd.Index]]:
+    """Cria dobras em que toda temporada de treino antecede a validacao."""
+    seasons = sorted(data["season"].astype(str).unique())
+    splits = []
+    for season in seasons[-validation_seasons:]:
+        train_index = data.index[data["season"].astype(str) < season]
+        validation_index = data.index[data["season"].astype(str) == season]
+        if len(train_index) and len(validation_index):
+            splits.append((train_index, validation_index))
+    return splits
 
 
-def evaluate_betting_performance():
-    """Avalia o desempenho do modelo em produção usando Backtest financeiro e Kelly."""
-    df = build_features()
+def _summary(data: pd.DataFrame) -> dict[str, float | int]:
+    if data.empty:
+        return {"bets": 0, "staked": 0.0, "pl": 0.0, "yield_pct": 0.0, "wins": 0, "losses": 0, "pushes": 0, "max_drawdown_pct": 0.0}
+    staked = float(data["stake"].sum())
+    pl = float(data["pl"].sum())
+    max_drawdown = 0.0
+    if "bankroll" in data.columns:
+        equity = data["bankroll"].astype(float)
+        drawdowns = (equity.cummax() - equity) / equity.cummax().clip(lower=0.01) * 100
+        max_drawdown = float(drawdowns.max())
+    return {
+        "bets": len(data),
+        "staked": staked,
+        "pl": pl,
+        "yield_pct": (pl / staked * 100) if staked else 0.0,
+        "wins": int((data["result"] == "Green").sum()),
+        "losses": int((data["result"] == "Red").sum()),
+        "pushes": int((data["result"] == "Push").sum()),
+        "max_drawdown_pct": max_drawdown,
+    }
 
-    model = CatBoostClassifier()
-    try:
-        model.load_model(str(MODEL_PATH))
-        print(f"Modelo carregado com sucesso a partir de: {MODEL_PATH}")
-    except Exception:
-        print("Modelo local não encontrado. Iniciando treinamento do zero...")
-        from nhl_engine.model.train import train_model
 
-        model = train_model()
+def _breakdown(data: pd.DataFrame, column: str) -> pd.DataFrame:
+    rows = [{column: value, **_summary(group)} for value, group in data.groupby(column, sort=True)]
+    return pd.DataFrame(rows)
 
-    last_season = df["season"].max()
-    test_results = df[df["season"] == last_season].copy()
 
-    print(f"\nAvaliando desempenho na temporada de teste: {last_season} ({len(test_results)} jogos)...")
+def scenario_report(bets: pd.DataFrame) -> dict:
+    """Resume o cenario assumido, sempre preservando o alerta de limitacao."""
+    totals = bets[bets["market"] == "Total"]
+    return {
+        "warning": SCENARIO_WARNING,
+        "overall": _summary(bets),
+        "by_market": _breakdown(bets, "market"),
+        "by_game_type": _breakdown(bets, "game_type"),
+        "by_season": _breakdown(bets, "season"),
+        "by_line": _breakdown(totals, "line") if "line" in totals.columns else pd.DataFrame(),
+    }
 
-    x_test = test_results[FEATURE_COLUMNS]
-    y_test = test_results["target"]
 
-    test_results["prob_home"] = model.predict_proba(x_test)[:, 1]
-    test_results["pred_home"] = (test_results["prob_home"] > 0.5).astype(int)
+def _fit_fold_models(train: pd.DataFrame) -> tuple[CatBoostClassifier, CatBoostClassifier]:
+    classifier = CatBoostClassifier(iterations=200, depth=4, learning_rate=0.05, loss_function="Logloss", verbose=0, random_seed=42, allow_writing_files=False)
+    total_distribution = CatBoostClassifier(iterations=300, depth=5, learning_rate=0.05, loss_function="MultiClass", verbose=0, random_seed=42, allow_writing_files=False)
+    x_train = train[PREGAME_FEATURE_COLUMNS]
+    classifier.fit(x_train, train["target_home_win"])
+    total_distribution.fit(x_train, train["total_goals"].clip(upper=12))
+    return classifier, total_distribution
 
-    # 1. Métricas Estatísticas Tradicionais
-    acc = accuracy_score(y_test, test_results["pred_home"])
-    loss = log_loss(y_test, test_results["prob_home"])
-    brier = brier_score_loss(y_test, test_results["prob_home"])
 
-    print("\n" + "=" * 50)
-    print("MÉTRICAS ESTATÍSTICAS DA TEMPORADA:")
-    print(f"Acurácia: {acc:.2%}")
-    print(f"Log Loss: {loss:.4f}")
-    print(f"Brier Score (Calibração): {brier:.4f}")
-    print("=" * 50)
+def build_walk_forward_predictions(
+    features: pd.DataFrame,
+    validation_seasons: int = 3,
+    total_lines: tuple[float, ...] = SCENARIO_TOTAL_LINES,
+) -> pd.DataFrame:
+    """Treina em temporadas passadas e gera uma selecao por mercado/jogo."""
+    predictions = []
+    for train_index, validation_index in walk_forward_season_splits(features, validation_seasons):
+        train = features.loc[train_index]
+        validation = features.loc[validation_index]
+        classifier, total_distribution = _fit_fold_models(train)
+        x_validation = validation[PREGAME_FEATURE_COLUMNS]
+        home_probabilities = classifier.predict_proba(x_validation)[:, 1]
+        total_distributions = total_distribution.predict_proba(x_validation)
 
-    # 2. Backtest de Apostas de Valor com Critério de Kelly
-    # Odd de mercado simulada: 1.91 (Vig conservador de 4.5% para ambos os lados)
-    market_odd = 1.91
-    implied_prob = 1 / market_odd  # ~52.36%
+        for position, (_, row) in enumerate(validation.iterrows()):
+            prob_home = float(home_probabilities[position])
+            moneyline_side = "Home" if prob_home >= 0.5 else "Away"
+            moneyline_probability = prob_home if moneyline_side == "Home" else 1 - prob_home
+            moneyline_result = "Green" if (row["target_home_win"] == 1) == (moneyline_side == "Home") else "Red"
+            base = {"date": row["date"], "season": row["season"], "game_type": int(row["game_type"])}
+            predictions.append(
+                {
+                    **base,
+                    "market": "Moneyline",
+                    "side": moneyline_side,
+                    "win_probability": moneyline_probability,
+                    "push_probability": 0.0,
+                    "result": moneyline_result,
+                },
+            )
 
-    initial_bankroll = 100.0
-    kelly_fraction = 0.25  # 1/4 Kelly para controle de risco profissional
+            for total_line in total_lines:
+                probabilities = total_probabilities_from_distribution(total_distribution.classes_, total_distributions[position], total_line)
+                total_side = "Over" if probabilities.over >= probabilities.under else "Under"
+                if not is_validated_total_strategy(total_side, total_line):
+                    continue
+                total_probability = probabilities.over if total_side == "Over" else probabilities.under
+                total_result = settle_total_bet(total_side, total_line, int(row["total_goals"]))
+                predictions.append(
+                    {
+                        **base,
+                        "market": "Total",
+                        "line": total_line,
+                        "side": f"{total_side} {total_line:g}",
+                        "win_probability": total_probability,
+                        "push_probability": probabilities.push,
+                        "result": total_result,
+                    },
+                )
+    return pd.DataFrame(predictions).sort_values(["market", "date"]).reset_index(drop=True)
 
+
+def simulate_scenario(predictions: pd.DataFrame, initial_bankroll: float = 100.0) -> pd.DataFrame:
+    """Simula uma unica selecao por mercado assumindo a odd minima exigida."""
+    bankrolls: dict[str, float] = {}
     bets = []
-
-    for idx, row in test_results.iterrows():
-        prob_h = row["prob_home"]
-        target = row["target"]
-
-        # Aposta no Mandante (Home) se houver EV+
-        if prob_h > implied_prob:
-            kelly_f = (prob_h * market_odd - 1) / (market_odd - 1)
-            stake = kelly_f * kelly_fraction * initial_bankroll
-            stake = min(stake, 10.0)  # Limite de stake máxima por aposta (10% da banca)
-
-            pl = stake * (market_odd - 1) if target == 1 else -stake
-            bets.append({"tipo": "HOME", "prob": prob_h, "stake": stake, "pl": pl, "win": int(target == 1)})
-
-        # Aposta no Visitante (Away) se houver EV+
-        elif (1 - prob_h) > implied_prob:
-            prob_a = 1 - prob_h
-            kelly_f = (prob_a * market_odd - 1) / (market_odd - 1)
-            stake = kelly_f * kelly_fraction * initial_bankroll
-            stake = min(stake, 10.0)
-
-            pl = stake * (market_odd - 1) if target == 0 else -stake
-            bets.append({"tipo": "AWAY", "prob": prob_a, "stake": stake, "pl": pl, "win": int(target == 0)})
-
-    # Métricas de Backtesting
-    if len(bets) > 0:
-        df_bets = pd.DataFrame(bets)
-        total_bets = len(df_bets)
-        win_bets = df_bets["win"].sum()
-        win_rate = win_bets / total_bets
-        total_staked = df_bets["stake"].sum()
-        total_pl = df_bets["pl"].sum()
-        yield_pct = (total_pl / total_staked * 100) if total_staked > 0 else 0.0
-
-        # Cálculo do Drawdown Máximo
-        saldo = initial_bankroll + df_bets["pl"].cumsum()
-        peak = initial_bankroll
-        max_drawdown = 0.0
-        for s in saldo:
-            if s > peak:
-                peak = s
-            dd = (peak - s) / peak * 100
-            if dd > max_drawdown:
-                max_drawdown = dd
-
-        print("\nSIMULAÇÃO FINANCEIRA DE BACKTEST (+EV com 1/4 Kelly):")
-        print(f"Total de Oportunidades (+EV): {total_bets} jogos")
-        print(f"Taxa de Acerto nas Apostas: {win_rate:.2%}")
-        print(f"Volume Total Apostado: {total_staked:.2f} unidades")
-        print(f"Lucro Líquido Acumulado: {total_pl:+.2f} unidades")
-        print(f"Yield do Backtest: {yield_pct:+.2f}%")
-        print(f"Drawdown Máximo Estimado: {max_drawdown:.2f}%")
-    else:
-        print("\nNenhuma aposta de valor (+EV) foi identificada no backtest.")
-        total_pl = 0.0
-        yield_pct = 0.0
-
-    # 3. Auditoria de Aptidão para Produção
-    print("\n" + "=" * 50)
-    print("AUDITORIA DE PRODUÇÃO (VEREDICTO TÉCNICO):")
-    print("=" * 50)
-
-    cond_acc = acc >= 0.595
-    cond_brier = brier <= 0.243
-    cond_yield = yield_pct > 0
-
-    print(f"1. Acurácia de Validação (>= 59.5%): {'PASS ✅' if cond_acc else 'FAIL ❌'} ({acc:.2%})")
-    print(f"2. Brier Score de Calibração (<= 0.243): {'PASS ✅' if cond_brier else 'FAIL ❌'} ({brier:.4f})")
-    print(f"3. Yield de Backtest Financeiro (> 0.0%): {'PASS ✅' if cond_yield else 'FAIL ❌'} ({yield_pct:+.2f}%)")
-
-    is_ready = cond_acc and cond_brier and cond_yield
-
-    if is_ready:
-        print("\n🏆 VEREDICTO FINAL: APTO PARA PRODUÇÃO! 🎉")
-        print("O modelo demonstra estabilidade preditiva, calibração confiável e lucratividade histórica consistente.")
-    else:
-        print("\n⚠️ VEREDICTO FINAL: REJEITADO PARA PRODUÇÃO.")
-        print("O modelo falhou em uma ou mais métricas críticas de auditoria. Refine as features ou colete mais dados.")
-    print("=" * 50)
+    for row in predictions.itertuples(index=False):
+        bankroll = bankrolls.setdefault(row.market, initial_bankroll)
+        assumed_odd = fair_odd(row.win_probability, row.push_probability) * (1 + SCENARIO_EDGE)
+        decision = evaluate_bet(
+            row.win_probability,
+            assumed_odd,
+            bankroll=bankroll,
+            kelly_multiplier=0.25,
+            push_probability=row.push_probability,
+        )
+        if not decision.qualifies or decision.stake <= 0:
+            continue
+        if row.result == "Green":
+            pl = decision.stake * (assumed_odd - 1)
+        elif row.result == "Red":
+            pl = -decision.stake
+        else:
+            pl = 0.0
+        bankrolls[row.market] = bankroll + pl
+        bets.append(
+            {
+                **row._asdict(),
+                "odd": assumed_odd,
+                "stake": decision.stake,
+                "pl": pl,
+                "bankroll": bankrolls[row.market],
+            },
+        )
+    return pd.DataFrame(bets)
 
 
-def main():
+def _print_breakdown(title: str, frame: pd.DataFrame) -> None:
+    print(f"\n{title}")
+    if frame.empty:
+        print("Sem apostas qualificadas.")
+        return
+    print(frame.to_string(index=False, float_format=lambda value: f"{value:.2f}"))
+
+
+def evaluate_betting_performance(validation_seasons: int = 3) -> dict:
+    """Executa avaliacao walk-forward e cenario de precos minimos."""
+    games = pd.read_csv(DATA_PATH)
+    features = build_pregame_features(games, min_games=5)
+    predictions = build_walk_forward_predictions(features, validation_seasons=validation_seasons)
+    bets = simulate_scenario(predictions)
+    report = scenario_report(bets)
+
+    print("=" * 72)
+    print("AVALIACAO WALK-FORWARD DE MONEYLINE E TOTAL DE GOLS")
+    print(SCENARIO_WARNING)
+    print("Resultados positivos nao comprovam que essas odds existiram no mercado.")
+    print("=" * 72)
+    _print_breakdown("POR MERCADO", report["by_market"])
+    _print_breakdown("POR TIPO DE JOGO (2=REGULAR, 3=PLAYOFFS)", report["by_game_type"])
+    _print_breakdown("POR TEMPORADA", report["by_season"])
+    _print_breakdown("TOTAIS POR LINHA VALIDADA", report["by_line"])
+    return report
+
+
+def main() -> None:
     evaluate_betting_performance()
 
 

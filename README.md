@@ -1,7 +1,7 @@
 # 🏒 NHL Predictive Engine
 
-> **Motor de Inteligência Artificial para análise e apostas profissionais na NHL.**
-> Combina dados avançados do Natural Stat Trick (NST) com um classificador CatBoost para prever vencedores de partidas e calcular apostas de valor esperado positivo (EV+).
+> **Motor de Inteligência Artificial para análise quantitativa de apostas na NHL.**
+> Calcula preços justos de Moneyline e Total de Gols, aplica filtros históricos e dimensiona risco sem prometer lucro futuro.
 
 ---
 
@@ -22,14 +22,17 @@
 
 ## 🎯 Visão Geral
 
-O **NHL Predictive Engine** é uma plataforma de análise quantitativa para o mercado de apostas **Moneyline da NHL**. O sistema:
+O **NHL Predictive Engine** é uma plataforma de análise quantitativa para os mercados **Moneyline** e **Total de Gols da NHL**. O sistema:
 
 1. **Coleta** estatísticas avançadas por temporada do [Natural Stat Trick](https://www.naturalstattrick.com/) (2015–2026)
 2. **Treina** um classificador CatBoost com validação cruzada temporal e otimização hiperparamétrica
-3. **Prediz** a probabilidade de vitória do time da casa (Mandante) para qualquer confronto
-4. **Identifica** apostas com valor esperado positivo (EV+) comparando odds justas vs. odds de mercado
+3. **Prediz** vitória e uma distribuição configurável de total de gols
+4. **Identifica** apostas somente quando a odd de mercado está pelo menos 5% acima da odd justa
 5. **Dimensiona** stakes via Critério de Kelly fracionado para gestão de risco profissional
-6. **Registra e monitora** o histórico de apostas com métricas de performance em tempo real
+6. **Registra e monitora** Moneyline, Over, Under e Push
+7. **Avalia** a estratégia com walk-forward temporal, sem usar jogos futuros nas features
+
+> Sem odds históricas, o relatório financeiro é um **cenário teórico** que pressupõe disponibilidade do preço mínimo exigido. Ele não comprova retorno executável nem garante lucro futuro.
 
 ---
 
@@ -124,9 +127,11 @@ O aplicativo possui **3 abas**:
 
 ### 🎯 Predição de Partida
 - Selecione mandante e visitante na sidebar
-- Insira as odds de mercado
-- Visualize: probabilidades do modelo, odds justas, badge EV+, stake sugerida via Kelly
-- Registre apostas com resultado: `Pendente` | `Green` | `Red`
+- Insira odds Moneyline, linha de gols e odds Over/Under
+- Visualize probabilidades, gols esperados, odds justas, edge e stake via Kelly
+- Entradas exigem 5% de edge e têm exposição limitada a 5% da banca
+- O filtro conservador de totais libera apenas segmentos positivos nas três dobras fora da amostra: `Over <= 5.5` e `Under >= 7.5`
+- Registre apostas com resultado: `Pendente` | `Green` | `Red` | `Push`
 
 ### 📊 Gestão de Banca
 - **Painel "Criar Banca":** define tamanho da banca, porcentagem da unidade (1–25%) e fração de Kelly — persistido em JSON
@@ -141,7 +146,8 @@ O aplicativo possui **3 abas**:
 
 ### Sidebar
 - Seleção de times (mandante / visitante)
-- Odds de mercado
+- Odds Moneyline e Total de Gols configurável
+- Botão combinado que atualiza jogos NHL e estatísticas NST
 - Resumo da banca ativa (lê da config persistida)
 
 ---
@@ -179,7 +185,7 @@ uv run streamlit run app.py
 O projeto expõe 4 scripts de linha de comando via `pyproject.toml`:
 
 ```bash
-# Buscar jogos históricos da NHL via API oficial
+# Buscar jogos concluídos de temporada regular e playoffs via API oficial
 uv run nhl-extract
 
 # Coletar estatísticas avançadas do Natural Stat Trick (requer Chrome)
@@ -188,7 +194,7 @@ uv run nhl-scrape-nst
 # Treinar o modelo CatBoost com otimização hiperparamétrica
 uv run nhl-train
 
-# Avaliar desempenho do modelo (backtest financeiro + Kelly)
+# Avaliar cenário teórico walk-forward de Moneyline e Total de Gols
 uv run nhl-evaluate
 ```
 
@@ -197,7 +203,7 @@ uv run nhl-evaluate
 ## 🔄 Fluxo de Trabalho Completo
 
 ```
-1. nhl-extract          → data/nhl_games_all_seasons.csv
+1. nhl-extract          → data/nhl_games_all_seasons.csv (regular + playoffs)
         ↓
 2. nhl-scrape-nst       → data/nst_team_stats.csv
         ↓
@@ -208,7 +214,7 @@ uv run nhl-evaluate
 5. streamlit run app.py → Interface de apostas em tempo real
 ```
 
-> **No dia a dia** (temporada ativa): apenas rode **nhl-scrape-nst** (coleta incremental) e abra o app. O modelo usa sempre a temporada mais recente disponível.
+> **No dia a dia**: use o botão **Atualizar Dados NHL + NST**. As duas fontes são atualizadas de forma independente; uma falha não apaga o histórico válido da outra.
 
 ---
 
@@ -295,6 +301,15 @@ Configurável como **porcentagem da banca total** (1% a 25%). O padrão recomend
 | **Taxa de Acerto (WR%)** | % de apostas vencedoras |
 | **P/L Acumulado (R$)** | Lucro líquido em reais |
 | **⏳ Pendentes** | Apostas aguardando resultado |
+
+### Regras da Estratégia
+
+- Odd mínima: `odd_justa × 1,05`
+- Kelly fracionado configurável
+- Exposição máxima: 5% da banca por entrada
+- Moneyline e gols usam features calculadas somente com partidas anteriores
+- Total de gols usa distribuição multiclasses calibrada para linhas configuráveis
+- Segmentos de totais sem consistência fora da amostra são exibidos, mas bloqueados como recomendação
 
 > Todas as métricas excluem apostas com resultado **Pendente** do cálculo.
 

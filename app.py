@@ -3,16 +3,25 @@ import streamlit as st
 from nhl_engine.betting.bankroll import load_bankroll_config
 from nhl_engine.config import TEAM_MAPPING
 from nhl_engine.model.predict import NHLPredictorV2
+from nhl_engine.model.totals import NHLTotalsPredictor
 from nhl_engine.ui import tab_bankroll, tab_model, tab_prediction
 from nhl_engine.ui.styles import CUSTOM_CSS
 
 st.set_page_config(page_title="NHL Predictive Engine 🏒", page_icon="🏒", layout="wide", initial_sidebar_state="expanded")
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+CACHE_VERSION = "pregame-totals-v1"
 
 
 @st.cache_resource
-def get_predictor() -> NHLPredictorV2:
+def get_predictor(cache_version: str) -> NHLPredictorV2:
     predictor = NHLPredictorV2()
+    predictor._initialize()
+    return predictor
+
+
+@st.cache_resource
+def get_totals_predictor(cache_version: str) -> NHLTotalsPredictor:
+    predictor = NHLTotalsPredictor()
     predictor._initialize()
     return predictor
 
@@ -23,7 +32,8 @@ def main():
     st.divider()
 
     try:
-        predictor = get_predictor()
+        predictor = get_predictor(CACHE_VERSION)
+        totals_predictor = get_totals_predictor(CACHE_VERSION)
         teams = sorted([t for t in predictor.team_states if t in TEAM_MAPPING])
     except Exception as e:
         st.error(f"Erro ao carregar dados: {e}")
@@ -55,11 +65,16 @@ def main():
             index=teams.index("TOR") if "TOR" in teams else 1,
             format_func=lambda x: TEAM_MAPPING.get(x, x),
         )
+        game_type = st.selectbox("Contexto da Partida", [2, 3], format_func=lambda value: "Temporada Regular" if value == 2 else "Playoffs")
 
         st.divider()
         st.markdown("#### Mercado de Apostas")
         market_odd_home = st.number_input(f"Odd na Casa ({home_team_abbr})", min_value=1.0, value=2.0, step=0.01)
         market_odd_away = st.number_input(f"Odd Visitante ({away_team_abbr})", min_value=1.0, value=2.0, step=0.01)
+        st.markdown("##### Total de Gols")
+        total_line = st.number_input("Linha de gols", min_value=0.5, max_value=10.5, value=5.5, step=0.5)
+        market_odd_over = st.number_input(f"Odd Over {total_line:g}", min_value=1.0, value=1.91, step=0.01)
+        market_odd_under = st.number_input(f"Odd Under {total_line:g}", min_value=1.0, value=1.91, step=0.01)
 
         st.divider()
         st.markdown("#### Banca Ativa")
@@ -69,7 +84,7 @@ def main():
         st.divider()
         scraping = st.session_state.get("scraper_running", False)
         if st.button(
-            "⏳ Coletando..." if scraping else "🔄 Atualizar Dados NST",
+            "⏳ Coletando..." if scraping else "🔄 Atualizar Dados NHL + NST",
             use_container_width=True,
             disabled=scraping,
             help="Captura os dados mais recentes do Natural Stat Trick.",
@@ -93,8 +108,13 @@ def main():
             predictor,
             home_team_abbr,
             away_team_abbr,
+            game_type,
             market_odd_home,
             market_odd_away,
+            totals_predictor,
+            total_line,
+            market_odd_over,
+            market_odd_under,
             initial_bankroll,
             unit_value,
             kelly_fraction,
@@ -111,14 +131,14 @@ def main():
     st.divider()
     with st.expander("ℹ️ Detalhes Técnicos do Modelo"):
         st.write("""
-        Este modelo utiliza o algoritmo **CatBoost** treinado com estatísticas consolidadas por temporada do **Natural Stat Trick (NST)** abrangendo de 2015 a 2026.
+        Os modelos de entrada utilizam **CatBoost** com features pré-jogo calculadas somente a partir de partidas anteriores. O painel lateral mantém os indicadores do **Natural Stat Trick (NST)** como contexto visual.
 
         **Fatores estruturais considerados:**
-        - **Aproveitamento (Points %):** Rendimento acumulado das equipes na tabela geral da temporada.
-        - **Posse de Disco (Corsi % e Fenwick %):** Proporção de chutes e tentativas de finalização das equipes.
-        - **Gols Esperados (xGF% e High Danger Chances):** Eficiência e periculosidade ofensiva/defensiva em zonas de alto risco.
-        - **Sorte/Regressão à Média (PDO):** Soma das porcentagens de finalização (Sh%) e defesas (Sv%) para indicar anomalias de desempenho.
-        - **Mapeamento de Diferenciais:** O classificador avalia a disparidade de performance relativa entre Mandante e Visitante para calcular as probabilidades exatas de vitória.
+        - **Forma recente:** gols marcados, gols sofridos e aproveitamento dos últimos jogos.
+        - **Desempenho acumulado:** médias da temporada disponíveis antes da partida.
+        - **Contexto:** mando, descanso e temporada regular ou playoffs.
+        - **Total de gols:** distribuição discreta calibrada para calcular Over, Under e Push.
+        - **Gestão de risco:** edge mínimo de 5%, Kelly fracionado e teto de 5% da banca.
         """)
 
 

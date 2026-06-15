@@ -1,13 +1,21 @@
 import numpy as np
-from catboost import CatBoostClassifier
+from catboost import CatBoostClassifier, CatBoostRegressor
 from sklearn.metrics import accuracy_score, log_loss
 
-from nhl_engine.config import MODEL_PATH
+from nhl_engine.config import (
+    DATA_PATH,
+    MODEL_PATH,
+    PREGAME_MONEYLINE_MODEL_PATH,
+    TOTALS_AWAY_MODEL_PATH,
+    TOTALS_DISTRIBUTION_MODEL_PATH,
+    TOTALS_HOME_MODEL_PATH,
+)
 from nhl_engine.model.features import (
     CAT_FEATURES,
     FEATURE_COLUMNS,
     build_features,
 )
+from nhl_engine.model.pregame import PREGAME_FEATURE_COLUMNS, build_pregame_features
 
 
 def brier_score_loss(y_true, y_prob):
@@ -64,6 +72,7 @@ def train_model(data_path: str | None = None) -> CatBoostClassifier:
                 loss_function="Logloss",
                 random_seed=42,
                 verbose=0,
+                allow_writing_files=False,
             )
             fold_model.fit(x_train, y_train, cat_features=CAT_FEATURES, eval_set=(x_val, y_val), early_stopping_rounds=30)
 
@@ -106,6 +115,7 @@ def train_model(data_path: str | None = None) -> CatBoostClassifier:
         eval_metric="Accuracy",
         random_seed=42,
         verbose=100,
+        allow_writing_files=False,
     )
 
     final_model.fit(
@@ -136,8 +146,34 @@ def train_model(data_path: str | None = None) -> CatBoostClassifier:
     return final_model
 
 
+def train_pregame_models(data_path: str | None = None) -> tuple[CatBoostClassifier, CatBoostRegressor, CatBoostRegressor, CatBoostClassifier]:
+    """Treina modelos de moneyline e gols com features disponíveis antes do jogo."""
+    import pandas as pd
+
+    games = pd.read_csv(data_path or DATA_PATH)
+    features = build_pregame_features(games, min_games=5)
+    x_train = features[PREGAME_FEATURE_COLUMNS]
+
+    moneyline = CatBoostClassifier(iterations=500, depth=5, learning_rate=0.04, loss_function="Logloss", verbose=100, random_seed=42, allow_writing_files=False)
+    home_goals = CatBoostRegressor(iterations=500, depth=5, learning_rate=0.04, loss_function="RMSE", verbose=100, random_seed=42, allow_writing_files=False)
+    away_goals = CatBoostRegressor(iterations=500, depth=5, learning_rate=0.04, loss_function="RMSE", verbose=100, random_seed=42, allow_writing_files=False)
+    total_distribution = CatBoostClassifier(iterations=500, depth=5, learning_rate=0.04, loss_function="MultiClass", verbose=100, random_seed=42, allow_writing_files=False)
+
+    moneyline.fit(x_train, features["target_home_win"])
+    home_goals.fit(x_train, features["home_score"])
+    away_goals.fit(x_train, features["away_score"])
+    total_distribution.fit(x_train, features["total_goals"].clip(upper=12))
+
+    moneyline.save_model(str(PREGAME_MONEYLINE_MODEL_PATH))
+    home_goals.save_model(str(TOTALS_HOME_MODEL_PATH))
+    away_goals.save_model(str(TOTALS_AWAY_MODEL_PATH))
+    total_distribution.save_model(str(TOTALS_DISTRIBUTION_MODEL_PATH))
+    print("Modelos pregame salvos com features temporais sem vazamento.")
+    return moneyline, home_goals, away_goals, total_distribution
+
+
 def main():
-    train_model()
+    train_pregame_models()
 
 
 if __name__ == "__main__":

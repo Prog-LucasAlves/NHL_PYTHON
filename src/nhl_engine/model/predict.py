@@ -3,14 +3,17 @@ import pandas as pd
 from catboost import CatBoostClassifier
 
 from nhl_engine.config import (
+    DATA_PATH,
     MODEL_PATH,
     NST_STATS_PATH,
+    PREGAME_MONEYLINE_MODEL_PATH,
 )
 from nhl_engine.model.features import (
     FEATURE_COLUMNS,
     NST_DIFF_FEATURES,
     NST_FEATURE_BASE,
 )
+from nhl_engine.model.pregame import PREGAME_FEATURE_COLUMNS, latest_matchup_features
 
 
 class NHLPredictorV2:
@@ -20,6 +23,8 @@ class NHLPredictorV2:
         self.model_path = model_path or str(MODEL_PATH)
         self.nst_stats_path = nst_stats_path or str(NST_STATS_PATH)
         self.model: CatBoostClassifier | None = None
+        self.pregame_model: CatBoostClassifier | None = None
+        self.games_df: pd.DataFrame = pd.DataFrame()
         self.team_states: dict[str, dict] = {}
         self.nst_df: pd.DataFrame = pd.DataFrame()
         self.latest_nst_season: str | None = None
@@ -28,6 +33,10 @@ class NHLPredictorV2:
         """Carrega o modelo e calcula o estado atual de todos os times usando a temporada mais recente do NST."""
         self.model = CatBoostClassifier()
         self.model.load_model(self.model_path)
+        if PREGAME_MONEYLINE_MODEL_PATH.exists() and DATA_PATH.exists():
+            self.pregame_model = CatBoostClassifier()
+            self.pregame_model.load_model(PREGAME_MONEYLINE_MODEL_PATH)
+            self.games_df = pd.read_csv(DATA_PATH)
 
         # Carrega e limpa as stats do NST
         try:
@@ -77,7 +86,7 @@ class NHLPredictorV2:
             self.nst_df = pd.DataFrame()
             self.latest_nst_season = None
 
-    def predict(self, home_team: str, away_team: str) -> tuple[float, float]:
+    def predict(self, home_team: str, away_team: str, game_type: int = 2) -> tuple[float, float]:
         if not self.model:
             self._initialize()
 
@@ -86,6 +95,11 @@ class NHLPredictorV2:
             self.team_states[home_team] = {"points_pct": 0.500, "cf_pct": 50.0, "xgf_pct": 50.0, "gf": 0.0, "ga": 0.0}
         if away_team not in self.team_states:
             self.team_states[away_team] = {"points_pct": 0.500, "cf_pct": 50.0, "xgf_pct": 50.0, "gf": 0.0, "ga": 0.0}
+
+        if self.pregame_model is not None and not self.games_df.empty:
+            features = latest_matchup_features(self.games_df, home_team, away_team, game_type)
+            prob_home = float(self.pregame_model.predict_proba(features[PREGAME_FEATURE_COLUMNS])[0][1])
+            return prob_home, 1 - prob_home
 
         # Busca estatísticas avançadas do NST
         h_nst_stats: dict[str, float] = {}

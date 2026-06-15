@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pandas as pd
 
@@ -35,7 +36,18 @@ def save_bankroll_config(bankroll: float, unit_value: float, kelly_fraction: flo
         )
 
 
-def log_bet(date: str, home: str, away: str, entry: str, odd: float, result: str, stake: float = 1.0) -> pd.DataFrame:
+def log_bet(
+    date: str,
+    home: str,
+    away: str,
+    entry: str,
+    odd: float,
+    result: str,
+    stake: float = 1.0,
+    market: str = "Moneyline",
+    line: float | None = None,
+    log_path: str | Path = BETS_LOG_PATH,
+) -> pd.DataFrame:
     """Registra uma aposta no CSV de histórico."""
     if result == "Green":
         pl = stake * (odd - 1)
@@ -54,27 +66,40 @@ def log_bet(date: str, home: str, away: str, entry: str, odd: float, result: str
                 "Resultado": result,
                 "Stake": round(stake, 2),
                 "PL": round(pl, 2),
+                "Mercado": market,
+                "Linha": line,
             },
         ],
     )
 
-    if BETS_LOG_PATH.exists():
-        df_log = pd.read_csv(BETS_LOG_PATH)
+    path = Path(log_path)
+    if path.exists():
+        df_log = pd.read_csv(path)
         if "Stake" not in df_log.columns:
             df_log["Stake"] = 1.0
+        if "Mercado" not in df_log.columns:
+            df_log["Mercado"] = "Moneyline"
+        if "Linha" not in df_log.columns:
+            df_log["Linha"] = None
         df_log = pd.concat([df_log, new_bet], ignore_index=True)
     else:
         df_log = new_bet
 
-    df_log.to_csv(BETS_LOG_PATH, index=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df_log.to_csv(path, index=False)
     return df_log
 
 
-def load_history() -> pd.DataFrame | None:
+def load_history(log_path: str | Path = BETS_LOG_PATH) -> pd.DataFrame | None:
     """Carrega o histórico de apostas. Retorna None se não existir."""
-    if not BETS_LOG_PATH.exists():
+    path = Path(log_path)
+    if not path.exists():
         return None
-    df_log = pd.read_csv(BETS_LOG_PATH)
+    df_log = pd.read_csv(path)
     if "Stake" not in df_log.columns:
         df_log["Stake"] = 1.0
+    if "Mercado" not in df_log.columns:
+        df_log["Mercado"] = "Moneyline"
+    if "Linha" not in df_log.columns:
+        df_log["Linha"] = None
     return df_log
